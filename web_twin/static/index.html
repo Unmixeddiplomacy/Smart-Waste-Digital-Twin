@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Waste Sorting - Digital Twin Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <div id="app">
+    <!-- TOP BAR -->
+    <header id="top-bar">
+      <h1>🗑️ Smart Waste Sorting Digital Twin</h1>
+      <div id="connection-status">● Disconnected</div>
+      <div id="controls">
+        <button id="btn-start-sim" onclick="startSimulation()">▶ Start Simulation</button>
+        <button id="btn-stop-sim" onclick="stopSimulation()">⏹ Stop Simulation</button>
+        <button id="btn-reset" onclick="resetSystem()">🔄 Reset</button>
+      </div>
+    </header>
+
+    <!-- MAIN CONTENT: 2 columns -->
+    <div id="main-content">
+
+      <!-- LEFT: 3D Twin -->
+      <div id="twin-panel">
+        <div id="three-container"></div>
+      </div>
+
+      <!-- RIGHT: Dashboard -->
+      <div id="dashboard-panel">
+
+        <!-- Stats Cards -->
+        <div id="stats-cards">
+          <div class="stat-card" id="stat-total">
+            <span class="stat-label">Total Sorted</span>
+            <span class="stat-value" id="val-total">0</span>
+          </div>
+          <div class="stat-card" id="stat-accuracy">
+            <span class="stat-label">Accuracy</span>
+            <span class="stat-value" id="val-accuracy">0%</span>
+          </div>
+          <div class="stat-card" id="stat-rate">
+            <span class="stat-label">Items/min</span>
+            <span class="stat-value" id="val-rate">0.0</span>
+          </div>
+        </div>
+
+        <!-- Bin Status -->
+        <div id="bin-status">
+          <h3>📦 Bin Status</h3>
+          <div id="bin-bars"></div>
+        </div>
+
+        <!-- Live Detection Feed -->
+        <div id="live-feed">
+          <h3>🎯 Live Detections</h3>
+          <div id="detection-log"></div>
+        </div>
+
+        <!-- Chart -->
+        <div id="chart-panel">
+          <h3>📊 Sorting History</h3>
+          <canvas id="sorting-chart"></canvas>
+        </div>
+
+        <!-- Alerts -->
+        <div id="alerts-panel">
+          <h3>⚠️ Alerts</h3>
+          <div id="alerts-list"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- CDN Scripts (order matters) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <!-- Local Scripts (order matters) -->
+  <script src="/static/js/websocket.js"></script>
+  <script src="/static/js/twin3d.js"></script>
+  <script src="/static/js/dashboard.js"></script>
+
+</body>
+</html>

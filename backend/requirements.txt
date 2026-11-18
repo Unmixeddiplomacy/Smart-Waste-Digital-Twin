@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+websockets
+sqlalchemy
+aiosqlite
+python-multipart
+jinja2
