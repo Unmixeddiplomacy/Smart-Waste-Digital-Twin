@@ -26,6 +26,15 @@ const BIN_TARGET_X_NORM = {
   trash: (-1 + 4.5) / 9
 };
 
+const BIN_TARGET_Z = {
+  cardboard: -1.5,
+  glass: -1.5,
+  metal: -1.5,
+  paper: 1.5,
+  plastic: 1.5,
+  trash: 1.5
+};
+
 // 2. Chart.js Setup
 let sortingChart = null;
 
@@ -96,66 +105,135 @@ function initChart() {
 // Initialize chart immediately (script loads at end of body)
 initChart();
 
-// 3. WebSocket Event Handlers
-if (typeof wsClient !== 'undefined') {
-  wsClient.on('sort_event', function (data) {
-    if (!data) return;
+// Track last rendered event ID so WS + REST fallback never duplicate an animation
+let lastHandledEventId = null;
 
-    // Update live detection log
-    addDetectionLog(data);
+function showActiveItemOverlay(data) {
+  const overlay = document.getElementById('active-item-overlay');
+  const img = document.getElementById('active-item-img');
+  const clsEl = document.getElementById('active-item-class');
+  const confEl = document.getElementById('active-item-conf');
+  if (!overlay) return;
 
-    // Update 3D scene — smoothly move waste down conveyor toward target bin
-    if (window.setWasteColor) {
-      window.setWasteColor(data.detected_class);
+  const detected = (data.detected_class || 'unknown').toUpperCase();
+  const color = BIN_COLORS[(data.detected_class || '').toLowerCase()] || '#00ff88';
+  const confPct = ((Number(data.confidence) || 0) * 100).toFixed(1);
+
+  if (clsEl) {
+    clsEl.textContent = detected;
+    clsEl.style.color = color;
+  }
+  if (confEl) {
+    confEl.textContent = `Confidence: ${confPct}% → ${(data.assigned_bin || detected).toUpperCase()}`;
+  }
+  if (img) {
+    if (data.image_url) {
+      img.src = data.image_url;
+      img.style.display = 'block';
+    } else {
+      img.style.display = 'none';
     }
+  }
+  overlay.style.borderColor = color;
+  overlay.style.display = 'flex';
+}
 
-    if (wasteAnimFrame) {
-      cancelAnimationFrame(wasteAnimFrame);
-      wasteAnimFrame = null;
-    }
-    if (hideWasteTimer) {
-      clearTimeout(hideWasteTimer);
-      hideWasteTimer = null;
-    }
+function handleSortEvent(data) {
+  if (!data) return;
+  if (data.id && data.id === lastHandledEventId) return;
+  if (data.id) lastHandledEventId = data.id;
 
-    const targetNorm = BIN_TARGET_X_NORM[data.assigned_bin] !== undefined
-      ? BIN_TARGET_X_NORM[data.assigned_bin]
-      : 0.5;
-    const durationMs = 1000;
+  // Update live detection log & 3D overlay preview
+  addDetectionLog(data);
+  showActiveItemOverlay(data);
+
+  // Cancel any in-flight animation
+  if (wasteAnimFrame) {
+    cancelAnimationFrame(wasteAnimFrame);
+    wasteAnimFrame = null;
+  }
+  if (hideWasteTimer) {
+    clearTimeout(hideWasteTimer);
+    hideWasteTimer = null;
+  }
+
+  // Set class color and load real image texture before gliding down the belt
+  if (window.setWasteColor) {
+    window.setWasteColor(data.detected_class);
+  }
+
+  const targetNorm = BIN_TARGET_X_NORM[data.assigned_bin] !== undefined
+    ? BIN_TARGET_X_NORM[data.assigned_bin]
+    : 0.5;
+  const targetZ = BIN_TARGET_Z[data.assigned_bin] !== undefined
+    ? BIN_TARGET_Z[data.assigned_bin]
+    : 1.5;
+
+  let animStarted = false;
+  function beginBeltAnimation() {
+    if (animStarted) return;
+    animStarted = true;
+
+    const beltDurationMs = 1800;
+    const divertDurationMs = 700;
     const startTime = performance.now();
+    let gateOpened = false;
 
     function stepWaste(now) {
-      const progress = Math.min((now - startTime) / durationMs, 1);
-      if (window.updateWastePosition) {
-        window.updateWastePosition(progress * targetNorm);
-      }
-      if (progress < 1) {
+      const elapsed = now - startTime;
+
+      if (elapsed < beltDurationMs) {
+        // Phase 1: Travel down the conveyor belt
+        const p = Math.min(elapsed / beltDurationMs, 1);
+        if (window.updateWastePosition) {
+          window.updateWastePosition(p * targetNorm, 0, 0);
+        }
+        wasteAnimFrame = requestAnimationFrame(stepWaste);
+      } else if (elapsed < beltDurationMs + divertDurationMs) {
+        // Phase 2: Open diverter gate and push image into the target bin
+        if (!gateOpened) {
+          gateOpened = true;
+          if (window.animateGate && data.assigned_bin) {
+            window.animateGate(data.assigned_bin);
+          }
+        }
+        const dp = Math.min((elapsed - beltDurationMs) / divertDurationMs, 1);
+        if (window.updateWastePosition) {
+          window.updateWastePosition(targetNorm, dp * targetZ, -0.35 * dp * dp);
+        }
         wasteAnimFrame = requestAnimationFrame(stepWaste);
       } else {
         wasteAnimFrame = null;
-        if (window.animateGate && data.assigned_bin) {
-          window.animateGate(data.assigned_bin);
+        if (window.hideWaste) {
+          window.hideWaste();
         }
-        hideWasteTimer = setTimeout(function () {
-          if (window.hideWaste) {
-            window.hideWaste();
-          }
-          hideWasteTimer = null;
-        }, 500);
       }
     }
 
     if (typeof requestAnimationFrame === 'function' && window.updateWastePosition) {
       wasteAnimFrame = requestAnimationFrame(stepWaste);
     } else {
-      if (window.updateWastePosition) window.updateWastePosition(targetNorm);
+      if (window.updateWastePosition) window.updateWastePosition(targetNorm, 0, 0);
       if (window.animateGate && data.assigned_bin) window.animateGate(data.assigned_bin);
       hideWasteTimer = setTimeout(function () {
         if (window.hideWaste) window.hideWaste();
         hideWasteTimer = null;
       }, 1500);
     }
-  });
+  }
+
+  if (window.setWasteImage) {
+    window.setWasteImage(data.image_url || null, beginBeltAnimation);
+    // Safety fallback if texture load is slow
+    setTimeout(beginBeltAnimation, 350);
+  } else {
+    beginBeltAnimation();
+  }
+}
+
+// 3. WebSocket Event Handlers
+if (typeof wsClient !== 'undefined') {
+  wsClient.on('sort_event', handleSortEvent);
 
   wsClient.on('stats_update', function (data) {
     if (!data) return;
@@ -219,9 +297,13 @@ function addDetectionLog(data) {
 
   const entry = document.createElement('div');
   entry.className = 'detection-entry';
+  const thumbHtml = data.image_url
+    ? `<img class="detection-thumb" src="${data.image_url}" alt="${detectedClass}">`
+    : '';
   entry.innerHTML =
-    `<span style="color:${color}">[${time}] ${icon} ${detectedClass.toUpperCase()}</span>` +
-    ` → Bin: ${assignedBin} (${confidencePct}%)`;
+    `${thumbHtml}` +
+    `<span><span style="color:${color}">[${time}] ${icon} ${detectedClass.toUpperCase()}</span>` +
+    ` → Bin: ${assignedBin} (${confidencePct}%)</span>`;
 
   log.prepend(entry);
 
@@ -307,6 +389,69 @@ function updateChart(stats) {
 }
 
 // 5. Control Functions (called by HTML buttons)
+
+async function uploadWasteImage(event) {
+  const input = event.target;
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+
+  const controls = document.getElementById('controls');
+  const uploadBtn = document.getElementById('btn-upload-img');
+  if (controls) controls.classList.add('loading');
+  if (uploadBtn) uploadBtn.textContent = '⏳ Classifying...';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch('/api/predict', {
+      method: 'POST',
+      body: formData
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errText}`);
+    }
+    const result = await res.json();
+    const conf = ((Number(result.confidence) || 0) * 100).toFixed(1);
+    addAlert(`Classified "${file.name}" → ${result.class.toUpperCase()} (${conf}%)`, 'info');
+
+    // Trigger 3D animation & refresh immediately even if WebSocket is reconnecting
+    handleSortEvent({
+      id: result.event_id,
+      detected_class: result.class,
+      confidence: result.confidence,
+      assigned_bin: result.class,
+      success: true,
+      image_url: result.image_url
+    });
+
+    if (typeof wsClient === 'undefined' || !wsClient.ws || wsClient.ws.readyState !== WebSocket.OPEN) {
+      const [statsRes, binsRes] = await Promise.all([
+        fetch('/api/stats').then(r => r.json()),
+        fetch('/api/bins').then(r => r.json())
+      ]);
+      updateStatsCards(statsRes);
+      updateChart(statsRes);
+      updateBinBars(binsRes);
+    }
+  } catch (err) {
+    console.error('API error:', err);
+    addAlert(`Image prediction failed: ${err.message}`, 'error');
+  } finally {
+    if (controls) controls.classList.remove('loading');
+    if (uploadBtn) uploadBtn.textContent = '📷 Upload Image';
+    input.value = '';
+  }
+}
+
+// Wire file input change listener cleanly
+(function () {
+  const fileInput = document.getElementById('image-upload-input');
+  if (fileInput) {
+    fileInput.addEventListener('change', uploadWasteImage);
+  }
+})();
 
 async function startSimulation() {
   const startBtn = document.getElementById('btn-start-sim');

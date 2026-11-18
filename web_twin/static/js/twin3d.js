@@ -178,13 +178,47 @@
     bins[name] = { mesh: binMesh, fillMesh: fillMesh, fill_level: 0 };
   });
 
-  // ===== 10. Waste Object =====
-  var wasteGeo = new THREE.SphereGeometry(0.15, 16, 16);
-  var wasteMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
-  var wasteObject = new THREE.Mesh(wasteGeo, wasteMat);
-  wasteObject.position.set(-4.5, 0.85, 0);
-  wasteObject.castShadow = true;
+  // ===== 10. Waste Object (Textured 3D Parcel + Floating Image Card) =====
+  var textureLoader = new THREE.TextureLoader();
+  var currentWasteTexture = null;
+  var currentWasteColorHex = 0xffffff;
+
+  var wasteObject = new THREE.Group();
+  wasteObject.position.set(-4.5, 0.65, 0);
   wasteObject.visible = false;
+
+  // Class-colored base tray sitting directly on the belt
+  var trayGeo = new THREE.BoxGeometry(0.68, 0.08, 0.68);
+  var trayMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: 0x222222,
+    roughness: 0.4
+  });
+  var wasteTray = new THREE.Mesh(trayGeo, trayMat);
+  wasteTray.position.y = 0.04;
+  wasteTray.castShadow = true;
+  wasteObject.add(wasteTray);
+
+  // 3D cube carrying the real image texture (MeshBasicMaterial keeps photo bright)
+  var wasteBoxGeo = new THREE.BoxGeometry(0.58, 0.58, 0.58);
+  var wasteBoxMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  var wasteBox = new THREE.Mesh(wasteBoxGeo, wasteBoxMat);
+  wasteBox.position.y = 0.37;
+  wasteBox.castShadow = true;
+  wasteObject.add(wasteBox);
+
+  // Floating camera-facing image sprite above the cube for clear viewing from any angle
+  var wasteSpriteMat = new THREE.SpriteMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.95
+  });
+  var wasteSprite = new THREE.Sprite(wasteSpriteMat);
+  wasteSprite.scale.set(0.85, 0.85, 1);
+  wasteSprite.position.y = 1.15;
+  wasteSprite.visible = false;
+  wasteObject.add(wasteSprite);
+
   scene.add(wasteObject);
 
   // ===== 11. Gates / Diverters =====
@@ -226,10 +260,12 @@
 
   // ===== 13. Global API Functions =====
 
-  window.updateWastePosition = function (x_normalized) {
-    // x_normalized: 0 to 1 (start to end of belt)
-    // Map to belt x range: -4.5 to 4.5
+  window.updateWastePosition = function (x_normalized, z_offset, y_offset) {
+    // x_normalized: 0 to 1 (start to end of belt -> -4.5 to +4.5)
+    // Optional z_offset & y_offset allow diverting sideways and dropping into the target bin
     wasteObject.position.x = -4.5 + x_normalized * 9;
+    wasteObject.position.z = typeof z_offset === 'number' ? z_offset : 0;
+    wasteObject.position.y = 0.65 + (typeof y_offset === 'number' ? y_offset : 0);
     wasteObject.visible = true;
   };
 
@@ -242,7 +278,62 @@
       plastic:   0x0088ff,
       trash:     0xff4444
     };
-    wasteObject.material.color.setHex(colors[className] || 0xffffff);
+    currentWasteColorHex = colors[className] || 0xffffff;
+    trayMat.color.setHex(currentWasteColorHex);
+    trayMat.emissive.setHex(currentWasteColorHex);
+    trayMat.emissiveIntensity = 0.35;
+    if (!wasteBoxMat.map) {
+      wasteBoxMat.color.setHex(currentWasteColorHex);
+    }
+  };
+
+  window.setWasteImage = function (imageUrl, onLoaded) {
+    if (!imageUrl) {
+      if (currentWasteTexture) {
+        currentWasteTexture.dispose();
+        currentWasteTexture = null;
+      }
+      wasteBoxMat.map = null;
+      wasteBoxMat.color.setHex(currentWasteColorHex);
+      wasteBoxMat.needsUpdate = true;
+      wasteSpriteMat.map = null;
+      wasteSpriteMat.needsUpdate = true;
+      wasteSprite.visible = false;
+      if (typeof onLoaded === 'function') onLoaded();
+      return;
+    }
+
+    textureLoader.load(
+      imageUrl,
+      function (texture) {
+        if (currentWasteTexture && currentWasteTexture !== texture) {
+          currentWasteTexture.dispose();
+        }
+        // Crisp rendering for arbitrary (non-power-of-two) uploaded images
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
+
+        currentWasteTexture = texture;
+        wasteBoxMat.map = texture;
+        wasteBoxMat.color.setHex(0xffffff); // no tint so real photo colors stay accurate
+        wasteBoxMat.needsUpdate = true;
+
+        wasteSpriteMat.map = texture;
+        wasteSpriteMat.needsUpdate = true;
+        wasteSprite.visible = true;
+        if (typeof onLoaded === 'function') onLoaded();
+      },
+      undefined,
+      function () {
+        // Fallback to solid class color if image fails to load
+        wasteBoxMat.map = null;
+        wasteBoxMat.color.setHex(currentWasteColorHex);
+        wasteBoxMat.needsUpdate = true;
+        wasteSprite.visible = false;
+        if (typeof onLoaded === 'function') onLoaded();
+      }
+    );
   };
 
   window.updateBinFill = function (binName, fillPercent) {
@@ -273,7 +364,7 @@
 
   window.hideWaste = function () {
     wasteObject.visible = false;
-    wasteObject.position.set(-4.5, 0.85, 0);
+    wasteObject.position.set(-4.5, 0.65, 0);
   };
 
   // ===== 14. Animation Loop =====
